@@ -1,0 +1,13 @@
+# Variante AKS du service.yaml : LoadBalancer au lieu de NodePort.
+# Azure provisionne une IP publique automatiquement (kubectl get svc -w pour la voir apparaître).
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-api
+spec:
+  type: LoadBalancer
+  selector:
+    app: backend-api
+  ports:
+    - port: 80
+      targetPort: 3000

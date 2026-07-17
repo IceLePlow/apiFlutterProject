@@ -1,0 +1,14 @@
+# K3s (on-prem) : NodePort, accessible via <IP-machine>:30080
+# AKS : dupliquer ce fichier en service-aks.yaml et remplacer NodePort par LoadBalancer (retire nodePort, Azure assigne une IP publique)
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-api
+spec:
+  type: NodePort
+  selector:
+    app: backend-api
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30080
