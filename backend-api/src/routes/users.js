@@ -10,9 +10,9 @@ const SALT_ROUNDS = 10;
 
 router.use(auth, adminOnly);
 
-router.get('/', (req, res, next) => {
+router.get('/', async (req, res, next) => {
   try {
-    res.json(User.findAll().map(User.toJson));
+    res.json((await User.findAll()).map(User.toJson));
   } catch (err) {
     next(err);
   }
@@ -28,12 +28,12 @@ router.post('/', async (req, res, next) => {
     if (!role || !ROLES.includes(role)) {
       return res.status(400).json({ error: `role doit être l'un de : ${ROLES.join(', ')}` });
     }
-    if (User.findByUsername(username.trim())) {
+    if (await User.findByUsername(username.trim())) {
       return res.status(400).json({ error: 'Ce username est déjà utilisé' });
     }
 
     const hash = await bcrypt.hash(password, SALT_ROUNDS);
-    const user = User.create({
+    const user = await User.create({
       username: username.trim(),
       passwordHash: hash,
       role,
@@ -46,28 +46,28 @@ router.post('/', async (req, res, next) => {
   }
 });
 
-router.patch('/:id/role', (req, res, next) => {
+router.patch('/:id/role', async (req, res, next) => {
   try {
     const { role } = req.body;
     if (!role || !ROLES.includes(role)) {
       return res.status(400).json({ error: `role doit être l'un de : ${ROLES.join(', ')}` });
     }
-    if (!User.findById(req.params.id)) {
+    if (!(await User.findById(req.params.id))) {
       return res.status(404).json({ error: 'Utilisateur introuvable' });
     }
 
-    res.json(User.toJson(User.updateRole(req.params.id, role)));
+    res.json(User.toJson(await User.updateRole(req.params.id, role)));
   } catch (err) {
     next(err);
   }
 });
 
-router.delete('/:id', (req, res, next) => {
+router.delete('/:id', async (req, res, next) => {
   try {
-    if (!User.findById(req.params.id)) {
+    if (!(await User.findById(req.params.id))) {
       return res.status(404).json({ error: 'Utilisateur introuvable' });
     }
-    User.remove(req.params.id);
+    await User.remove(req.params.id);
     res.status(204).send();
   } catch (err) {
     next(err);

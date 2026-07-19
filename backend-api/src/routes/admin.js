@@ -7,9 +7,9 @@ const router = express.Router();
 
 // Équivalent de DBService.deleteDatabaseFile() : vide entièrement la base
 // (produits, mouvements, utilisateurs). Réservé à l'administrateur.
-router.delete('/reset-all', auth, adminOnly, (req, res, next) => {
+router.delete('/reset-all', auth, adminOnly, async (req, res, next) => {
   try {
-    resetAll();
+    await resetAll();
     res.json({ ok: true });
   } catch (err) {
     next(err);

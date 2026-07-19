@@ -1,4 +1,4 @@
-const { db } = require('../config/db');
+const { pool } = require('../config/db');
 
 // Format aligné avec AppUser.fromMap (lib/models/user.dart) : passwordHash toujours
 // vide (le hash n'est jamais renvoyé au client), isTempPassword en 0/1.
@@ -14,48 +14,51 @@ function toJson(row) {
 }
 
 const User = {
-  create({ username, passwordHash, role, isTempPassword = false }) {
-    const stmt = db.prepare(
-      'INSERT INTO users (username, password_hash, role, is_temp_password) VALUES (?, ?, ?, ?)'
+  async create({ username, passwordHash, role, isTempPassword = false }) {
+    const { rows } = await pool.query(
+      'INSERT INTO users (username, password_hash, role, is_temp_password) VALUES ($1, $2, $3, $4) RETURNING id',
+      [username, passwordHash, role, isTempPassword ? 1 : 0]
     );
-    const info = stmt.run(username, passwordHash, role, isTempPassword ? 1 : 0);
-    return User.findById(info.lastInsertRowid);
+    return User.findById(rows[0].id);
   },
 
-  findById(id) {
-    return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+  async findById(id) {
+    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+    return rows[0] || null;
   },
 
-  findByUsername(username) {
-    return db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+  async findByUsername(username) {
+    const { rows } = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+    return rows[0] || null;
   },
 
-  findAll() {
-    return db.prepare('SELECT * FROM users ORDER BY username ASC').all();
+  async findAll() {
+    const { rows } = await pool.query('SELECT * FROM users ORDER BY username ASC');
+    return rows;
   },
 
-  count() {
-    const r = db.prepare('SELECT COUNT(*) AS c FROM users').get();
-    return r.c;
+  async count() {
+    const { rows } = await pool.query('SELECT COUNT(*) AS c FROM users');
+    return parseInt(rows[0].c, 10);
   },
 
-  updateRole(id, role) {
-    db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, id);
+  async updateRole(id, role) {
+    await pool.query('UPDATE users SET role = $1 WHERE id = $2', [role, id]);
     return User.findById(id);
   },
 
-  updatePassword(id, passwordHash, { clearTempFlag = true } = {}) {
+  async updatePassword(id, passwordHash, { clearTempFlag = true } = {}) {
     if (clearTempFlag) {
-      db.prepare('UPDATE users SET password_hash = ?, is_temp_password = 0 WHERE id = ?').run(passwordHash, id);
+      await pool.query('UPDATE users SET password_hash = $1, is_temp_password = 0 WHERE id = $2', [passwordHash, id]);
     } else {
-      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, id);
+      await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, id]);
     }
     return User.findById(id);
   },
 
-  remove(id) {
-    const info = db.prepare('DELETE FROM users WHERE id = ?').run(id);
-    return info.changes > 0;
+  async remove(id) {
+    const result = await pool.query('DELETE FROM users WHERE id = $1', [id]);
+    return result.rowCount > 0;
   },
 
   toJson,

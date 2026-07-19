@@ -1,5 +1,4 @@
-const { db } = require('../config/db');
-const Product = require('./Product');
+const { pool } = require('../config/db');
 
 // Format aligné avec ProductMovement.fromMap (lib/models/product_movement.dart)
 function toJson(row) {
@@ -7,7 +6,7 @@ function toJson(row) {
   return {
     id: row.id,
     product_id: row.product_id,
-    ts: row.ts,
+    ts: Number(row.ts),
     type: row.type,
     quantity: row.quantity,
     unit_price: row.unit_price,
@@ -16,34 +15,37 @@ function toJson(row) {
 }
 
 const Movement = {
-  findById(id) {
-    return db.prepare('SELECT * FROM movements WHERE id = ?').get(id);
+  async findById(id) {
+    const { rows } = await pool.query('SELECT * FROM movements WHERE id = $1', [id]);
+    return rows[0] || null;
   },
 
-  findByProductId(productId, limit = 1000) {
-    return db
-      .prepare('SELECT * FROM movements WHERE product_id = ? ORDER BY ts DESC LIMIT ?')
-      .all(productId, limit);
+  async findByProductId(productId, limit = 1000) {
+    const { rows } = await pool.query(
+      'SELECT * FROM movements WHERE product_id = $1 ORDER BY ts DESC LIMIT $2',
+      [productId, limit]
+    );
+    return rows;
   },
 
-  findRecentWithProduct(types, limit = 5) {
-    const placeholders = types.map(() => '?').join(',');
-    return db
-      .prepare(
-        `SELECT
-           m.id, m.product_id, m.ts, m.type, m.quantity, m.unit_price, m.note,
-           p.id AS p_id, p.name, p.reference, p.category,
-           p.carton_count, p.items_per_carton, p.stock_out,
-           p.quantity_sold, p.losses,
-           p.unit_price AS p_unit_price,
-           p.carton_price, p.revenue, p.margin, p.tva_rate
-         FROM movements m
-         JOIN products p ON p.id = m.product_id
-         WHERE m.type IN (${placeholders})
-         ORDER BY m.ts DESC
-         LIMIT ?`
-      )
-      .all(...types, limit);
+  async findRecentWithProduct(types, limit = 5) {
+    const placeholders = types.map((_, i) => `$${i + 1}`).join(',');
+    const { rows } = await pool.query(
+      `SELECT
+         m.id, m.product_id, m.ts, m.type, m.quantity, m.unit_price, m.note,
+         p.id AS p_id, p.name, p.reference, p.category,
+         p.carton_count, p.items_per_carton, p.stock_out,
+         p.quantity_sold, p.losses,
+         p.unit_price AS p_unit_price,
+         p.carton_price, p.revenue, p.margin, p.tva_rate
+       FROM movements m
+       JOIN products p ON p.id = m.product_id
+       WHERE m.type IN (${placeholders})
+       ORDER BY m.ts DESC
+       LIMIT $${types.length + 1}`,
+      [...types, limit]
+    );
+    return rows;
   },
 
   /// Ajout de mouvement avec les mêmes règles métier que
@@ -52,15 +54,25 @@ const Movement = {
   /// - ventes + pertes <= stockOut
   /// - revenue += qty * unitPrice (vente)
   /// - margin = revenue - (cartonCount * cartonPrice)
-  createValidated({ product_id, ts, type, quantity, unit_price, note }) {
+  /// FOR UPDATE verrouille la ligne produit le temps de la transaction : necessaire
+  /// maintenant que plusieurs clusters (K3s + AKS) peuvent ecrire concurremment
+  /// sur la meme base partagee.
+  async createValidated({ product_id, ts, type, quantity, unit_price, note }) {
     if (!Number.isInteger(quantity) || quantity <= 0) {
       const err = new Error('Quantité invalide');
       err.status = 400;
       throw err;
     }
 
-    const tx = db.transaction(() => {
-      const product = Product.findById(product_id);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows: productRows } = await client.query(
+        'SELECT * FROM products WHERE id = $1 FOR UPDATE',
+        [product_id]
+      );
+      const product = productRows[0];
       if (!product) {
         const err = new Error(`Produit introuvable (id=${product_id})`);
         err.status = 404;
@@ -106,63 +118,68 @@ const Movement = {
         newLosses = futureLoss;
       }
 
-      const stmt = db.prepare(
-        'INSERT INTO movements (product_id, ts, type, quantity, unit_price, note) VALUES (?, ?, ?, ?, ?, ?)'
+      const { rows: moveRows } = await client.query(
+        'INSERT INTO movements (product_id, ts, type, quantity, unit_price, note) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+        [product_id, ts, type, quantity, unit_price ?? 0, note ?? null]
       );
-      const info = stmt.run(product_id, ts, type, quantity, unit_price ?? 0, note ?? null);
 
       const cartonsCost = product.carton_count * product.carton_price;
       const margin = newRevenue - cartonsCost;
 
-      db.prepare(
-        'UPDATE products SET stock_out = ?, quantity_sold = ?, losses = ?, revenue = ?, margin = ? WHERE id = ?'
-      ).run(newStockOut, newSold, newLosses, newRevenue, margin, product_id);
+      await client.query(
+        'UPDATE products SET stock_out = $1, quantity_sold = $2, losses = $3, revenue = $4, margin = $5 WHERE id = $6',
+        [newStockOut, newSold, newLosses, newRevenue, margin, product_id]
+      );
 
-      return Movement.findById(info.lastInsertRowid);
-    });
+      await client.query('COMMIT');
 
-    return tx();
+      const { rows } = await pool.query('SELECT * FROM movements WHERE id = $1', [moveRows[0].id]);
+      return rows[0];
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   },
 
-  remove(id) {
-    const info = db.prepare('DELETE FROM movements WHERE id = ?').run(id);
-    return info.changes > 0;
+  async remove(id) {
+    const result = await pool.query('DELETE FROM movements WHERE id = $1', [id]);
+    return result.rowCount > 0;
   },
 
-  salesByMonth(startMs, endMs) {
-    return db
-      .prepare(
-        `SELECT
-           strftime('%Y-%m', datetime(ts / 1000, 'unixepoch')) AS ym,
-           SUM(quantity) AS qty,
-           SUM(quantity * unit_price) AS revenue
-         FROM movements
-         WHERE type = 'sale' AND ts >= ? AND ts <= ?
-         GROUP BY ym
-         ORDER BY ym ASC`
-      )
-      .all(startMs, endMs)
-      .map((r) => ({ ym: r.ym, qty: r.qty || 0, revenue: r.revenue || 0.0 }));
+  async salesByMonth(startMs, endMs) {
+    const { rows } = await pool.query(
+      `SELECT
+         to_char(to_timestamp(ts / 1000), 'YYYY-MM') AS ym,
+         SUM(quantity) AS qty,
+         SUM(quantity * unit_price) AS revenue
+       FROM movements
+       WHERE type = 'sale' AND ts >= $1 AND ts <= $2
+       GROUP BY ym
+       ORDER BY ym ASC`,
+      [startMs, endMs]
+    );
+    return rows.map((r) => ({ ym: r.ym, qty: Number(r.qty) || 0, revenue: Number(r.revenue) || 0.0 }));
   },
 
-  kpisForRange(startMs, endMs) {
-    const r = db
-      .prepare(
-        `SELECT
-           SUM(CASE WHEN type = 'sale' THEN quantity ELSE 0 END) AS sales_qty,
-           SUM(CASE WHEN type = 'loss' THEN quantity ELSE 0 END) AS loss_qty,
-           SUM(CASE WHEN type = 'stock_out' THEN quantity ELSE 0 END) AS out_qty,
-           SUM(CASE WHEN type = 'sale' THEN (quantity * unit_price) ELSE 0 END) AS revenue
-         FROM movements
-         WHERE ts >= ? AND ts <= ?`
-      )
-      .get(startMs, endMs);
-
+  async kpisForRange(startMs, endMs) {
+    const { rows } = await pool.query(
+      `SELECT
+         SUM(CASE WHEN type = 'sale' THEN quantity ELSE 0 END) AS sales_qty,
+         SUM(CASE WHEN type = 'loss' THEN quantity ELSE 0 END) AS loss_qty,
+         SUM(CASE WHEN type = 'stock_out' THEN quantity ELSE 0 END) AS out_qty,
+         SUM(CASE WHEN type = 'sale' THEN (quantity * unit_price) ELSE 0 END) AS revenue
+       FROM movements
+       WHERE ts >= $1 AND ts <= $2`,
+      [startMs, endMs]
+    );
+    const r = rows[0];
     return {
-      sales_qty: r.sales_qty || 0,
-      loss_qty: r.loss_qty || 0,
-      out_qty: r.out_qty || 0,
-      revenue: r.revenue || 0.0,
+      sales_qty: Number(r.sales_qty) || 0,
+      loss_qty: Number(r.loss_qty) || 0,
+      out_qty: Number(r.out_qty) || 0,
+      revenue: Number(r.revenue) || 0.0,
     };
   },
 

@@ -11,8 +11,6 @@ const productRoutes = require('./routes/products');
 const movementRoutes = require('./routes/movements');
 const adminRoutes = require('./routes/admin');
 
-init();
-
 const app = express();
 
 app.use(cors());
@@ -42,8 +40,15 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(`Serveur démarré sur le port ${PORT}`);
-});
+init()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Serveur démarré sur le port ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('Échec de l\'initialisation de la base de données', err);
+    process.exit(1);
+  });
 
 module.exports = app;

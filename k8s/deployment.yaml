@@ -1,5 +1,5 @@
-# SQLite = fichier unique -> 1 seul replica pour l'étape K3s/AKS "burst simple".
-# Ne pas monter replicas > 1 tant que la DB reste SQLite (écritures concurrentes = corruption).
+# Postgres partage entre K3s et AKS -> plus de contrainte SQLite mono-instance.
+# Reste a 1 replica pour la demo, mais rien n'empeche de monter au-dela desormais.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,9 +25,6 @@ spec:
                 name: backend-config
             - secretRef:
                 name: backend-secret
-          volumeMounts:
-            - name: data
-              mountPath: /data
           readinessProbe:
             httpGet:
               path: /health
@@ -40,7 +37,3 @@ spec:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 10
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: backend-data

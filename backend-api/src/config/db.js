@@ -1,35 +1,30 @@
-const path = require('path');
-const fs = require('fs');
-const Database = require('better-sqlite3');
+const { Pool } = require('pg');
 
-const DB_PATH = process.env.DB_PATH || './data/stock.db';
-
-// S'assure que le dossier contenant le fichier SQLite existe (utile en conteneur/volume K8s)
-const dbDir = path.dirname(DB_PATH);
-if (dbDir && dbDir !== '.' && !fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
-
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+const pool = new Pool({
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT || 5432,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  ssl: { rejectUnauthorized: false },
+});
 
 // Rôles alignés avec lib/models/user_role.dart (RoleConfig.label)
 const ROLES = ['Admin', 'Point chaud', 'Boucherie', 'Épicerie'];
 
-function init() {
-  db.exec(`
+async function init() {
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       username TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL CHECK (role IN ('Admin', 'Point chaud', 'Boucherie', 'Épicerie')),
       is_temp_password INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS products (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       name TEXT NOT NULL,
       reference TEXT NOT NULL,
       category TEXT,
@@ -38,37 +33,43 @@ function init() {
       stock_out INTEGER NOT NULL DEFAULT 0,
       quantity_sold INTEGER NOT NULL DEFAULT 0,
       losses INTEGER NOT NULL DEFAULT 0,
-      unit_price REAL NOT NULL DEFAULT 0,
-      carton_price REAL NOT NULL DEFAULT 0,
-      revenue REAL NOT NULL DEFAULT 0,
-      margin REAL NOT NULL DEFAULT 0,
-      tva_rate REAL NOT NULL DEFAULT 0
+      unit_price DOUBLE PRECISION NOT NULL DEFAULT 0,
+      carton_price DOUBLE PRECISION NOT NULL DEFAULT 0,
+      revenue DOUBLE PRECISION NOT NULL DEFAULT 0,
+      margin DOUBLE PRECISION NOT NULL DEFAULT 0,
+      tva_rate DOUBLE PRECISION NOT NULL DEFAULT 0
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS ux_products_reference ON products(reference);
 
     CREATE TABLE IF NOT EXISTS movements (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      product_id INTEGER NOT NULL,
-      ts INTEGER NOT NULL,
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      ts BIGINT NOT NULL,
       type TEXT NOT NULL CHECK (type IN ('sale', 'loss', 'stock_in', 'stock_out')),
       quantity INTEGER NOT NULL CHECK (quantity > 0),
-      unit_price REAL NOT NULL DEFAULT 0,
-      note TEXT,
-      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+      unit_price DOUBLE PRECISION NOT NULL DEFAULT 0,
+      note TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_movements_product_ts ON movements(product_id, ts DESC);
   `);
 }
 
-function resetAll() {
-  const tx = db.transaction(() => {
-    db.prepare('DELETE FROM movements').run();
-    db.prepare('DELETE FROM products').run();
-    db.prepare('DELETE FROM users').run();
-  });
-  tx();
+async function resetAll() {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM movements');
+    await client.query('DELETE FROM products');
+    await client.query('DELETE FROM users');
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
-module.exports = { db, init, resetAll, ROLES };
+module.exports = { pool, init, resetAll, ROLES };

@@ -1,4 +1,4 @@
-const { db } = require('../config/db');
+const { pool } = require('../config/db');
 const { allowedCategories, isAdmin } = require('../config/permissions');
 
 const FIELDS = [
@@ -40,57 +40,65 @@ function toJson(row) {
 }
 
 const Product = {
-  findAll() {
-    return db.prepare('SELECT * FROM products ORDER BY name COLLATE NOCASE ASC').all();
+  async findAll() {
+    const { rows } = await pool.query('SELECT * FROM products ORDER BY LOWER(name) ASC');
+    return rows;
   },
 
-  findVisibleToRole(role) {
+  async findVisibleToRole(role) {
     if (isAdmin(role)) return Product.findAll();
 
     const cats = allowedCategories(role);
     if (cats.length === 0) return [];
 
-    const placeholders = cats.map(() => '?').join(',');
-    return db
-      .prepare(`SELECT * FROM products WHERE category IN (${placeholders}) ORDER BY name COLLATE NOCASE ASC`)
-      .all(...cats);
-  },
-
-  findRecent(limit = 5) {
-    return db.prepare('SELECT * FROM products ORDER BY id DESC LIMIT ?').all(limit);
-  },
-
-  findById(id) {
-    return db.prepare('SELECT * FROM products WHERE id = ?').get(id);
-  },
-
-  findByReference(reference) {
-    return db.prepare('SELECT * FROM products WHERE reference = ? LIMIT 1').get(reference);
-  },
-
-  create(data) {
-    const values = FIELDS.map((f) => fieldValue(data, f));
-    const stmt = db.prepare(
-      `INSERT INTO products (${FIELDS.join(', ')}) VALUES (${FIELDS.map(() => '?').join(', ')})`
+    const placeholders = cats.map((_, i) => `$${i + 1}`).join(',');
+    const { rows } = await pool.query(
+      `SELECT * FROM products WHERE category IN (${placeholders}) ORDER BY LOWER(name) ASC`,
+      cats
     );
-    const info = stmt.run(...values);
-    return Product.findById(info.lastInsertRowid);
+    return rows;
   },
 
-  update(id, data) {
-    const current = Product.findById(id);
+  async findRecent(limit = 5) {
+    const { rows } = await pool.query('SELECT * FROM products ORDER BY id DESC LIMIT $1', [limit]);
+    return rows;
+  },
+
+  async findById(id) {
+    const { rows } = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
+    return rows[0] || null;
+  },
+
+  async findByReference(reference) {
+    const { rows } = await pool.query('SELECT * FROM products WHERE reference = $1 LIMIT 1', [reference]);
+    return rows[0] || null;
+  },
+
+  async create(data) {
+    const values = FIELDS.map((f) => fieldValue(data, f));
+    const placeholders = FIELDS.map((_, i) => `$${i + 1}`).join(', ');
+    const { rows } = await pool.query(
+      `INSERT INTO products (${FIELDS.join(', ')}) VALUES (${placeholders}) RETURNING id`,
+      values
+    );
+    return Product.findById(rows[0].id);
+  },
+
+  async update(id, data) {
+    const current = await Product.findById(id);
     const values = FIELDS.map((f) => {
       const v = data[f];
       return v !== undefined && v !== null ? v : current[f];
     });
-    const setClause = FIELDS.map((f) => `${f} = ?`).join(', ');
-    db.prepare(`UPDATE products SET ${setClause} WHERE id = ?`).run(...values, id);
+    const setClause = FIELDS.map((f, i) => `${f} = $${i + 1}`).join(', ');
+    values.push(id);
+    await pool.query(`UPDATE products SET ${setClause} WHERE id = $${values.length}`, values);
     return Product.findById(id);
   },
 
-  remove(id) {
-    const info = db.prepare('DELETE FROM products WHERE id = ?').run(id);
-    return info.changes > 0;
+  async remove(id) {
+    const result = await pool.query('DELETE FROM products WHERE id = $1', [id]);
+    return result.rowCount > 0;
   },
 
   toJson,

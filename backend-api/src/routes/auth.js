@@ -33,13 +33,13 @@ function genTempPassword() {
 // de AuthService.ensureBootstrapAdmin, appelé au démarrage de l'app).
 router.post('/bootstrap', async (req, res, next) => {
   try {
-    if (User.count() > 0) {
+    if ((await User.count()) > 0) {
       return res.json({ created: false });
     }
 
     const tempPassword = genTempPassword();
     const hash = await bcrypt.hash(tempPassword, SALT_ROUNDS);
-    User.create({ username: 'admin', passwordHash: hash, role: 'Admin', isTempPassword: true });
+    await User.create({ username: 'admin', passwordHash: hash, role: 'Admin', isTempPassword: true });
 
     return res.json({ created: true, tempPassword });
   } catch (err) {
@@ -55,7 +55,7 @@ router.post('/login', async (req, res, next) => {
       return res.status(400).json({ error: 'username et password sont requis' });
     }
 
-    const user = User.findByUsername(username.trim());
+    const user = await User.findByUsername(username.trim());
     if (!user) {
       return res.status(401).json({ error: 'Identifiants invalides' });
     }
@@ -71,9 +71,9 @@ router.post('/login', async (req, res, next) => {
   }
 });
 
-router.get('/me', auth, (req, res, next) => {
+router.get('/me', auth, async (req, res, next) => {
   try {
-    const user = User.findById(req.user.id);
+    const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ error: 'Utilisateur introuvable' });
     res.json(User.toJson(user));
   } catch (err) {
@@ -90,7 +90,7 @@ router.post('/change-password', auth, async (req, res, next) => {
       return res.status(400).json({ error: 'oldPassword et newPassword sont requis' });
     }
 
-    const user = User.findById(req.user.id);
+    const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ error: 'Utilisateur introuvable' });
 
     const match = await bcrypt.compare(oldPassword, user.password_hash);
@@ -99,7 +99,7 @@ router.post('/change-password', auth, async (req, res, next) => {
     }
 
     const hash = await bcrypt.hash(newPassword, SALT_ROUNDS);
-    User.updatePassword(user.id, hash, { clearTempFlag: true });
+    await User.updatePassword(user.id, hash, { clearTempFlag: true });
 
     res.json({ ok: true });
   } catch (err) {
@@ -117,7 +117,7 @@ router.post('/set-password', auth, async (req, res, next) => {
     }
 
     const hash = await bcrypt.hash(newPassword, SALT_ROUNDS);
-    User.updatePassword(req.user.id, hash, { clearTempFlag: true });
+    await User.updatePassword(req.user.id, hash, { clearTempFlag: true });
 
     res.json({ ok: true });
   } catch (err) {

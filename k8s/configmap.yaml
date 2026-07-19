@@ -5,4 +5,6 @@ metadata:
 data:
   PORT: "3000"
   JWT_EXPIRES_IN: "1d"
-  DB_PATH: "/data/stock.db"
+  DB_HOST: "pg-bursting-demo.postgres.database.azure.com"
+  DB_PORT: "5432"
+  DB_NAME: "stockdb"

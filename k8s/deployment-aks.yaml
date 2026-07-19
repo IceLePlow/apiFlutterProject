@@ -1,5 +1,5 @@
-# Variante AKS de deployment.yaml : image tiree du registry ACR au lieu de l'image importee localement dans K3s.
-# Meme contrainte SQLite : 1 seul replica.
+# Variante AKS de deployment.yaml : image tiree du registry ACR.
+# Postgres partage avec K3s -> plus de PVC/volume local necessaire.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: backend-api
-          image: acrburstingdemo2026.azurecr.io/backend-api:v1
+          image: acrburstingdemo2026.azurecr.io/backend-api:v2
           imagePullPolicy: Always
           ports:
             - containerPort: 3000
@@ -25,9 +25,6 @@ spec:
                 name: backend-config
             - secretRef:
                 name: backend-secret
-          volumeMounts:
-            - name: data
-              mountPath: /data
           readinessProbe:
             httpGet:
               path: /health
@@ -40,7 +37,3 @@ spec:
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 10
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: backend-data

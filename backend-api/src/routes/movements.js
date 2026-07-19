@@ -13,7 +13,7 @@ function mapWithProduct(row) {
     movement: {
       id: row.id,
       product_id: row.product_id,
-      ts: row.ts,
+      ts: Number(row.ts),
       type: row.type,
       quantity: row.quantity,
       unit_price: row.unit_price,
@@ -38,19 +38,19 @@ function mapWithProduct(row) {
   };
 }
 
-router.get('/product/:product_id', (req, res, next) => {
+router.get('/product/:product_id', async (req, res, next) => {
   try {
-    const product = Product.findById(req.params.product_id);
+    const product = await Product.findById(req.params.product_id);
     if (!product) return res.status(404).json({ error: 'Produit introuvable' });
 
     const limit = parseInt(req.query.limit, 10) || 1000;
-    res.json(Movement.findByProductId(req.params.product_id, limit).map(Movement.toJson));
+    res.json((await Movement.findByProductId(req.params.product_id, limit)).map(Movement.toJson));
   } catch (err) {
     next(err);
   }
 });
 
-router.get('/recent', (req, res, next) => {
+router.get('/recent', async (req, res, next) => {
   try {
     const limit = parseInt(req.query.limit, 10) || 5;
     const types = (req.query.types ? String(req.query.types).split(',') : ['sale']).filter((t) =>
@@ -58,39 +58,39 @@ router.get('/recent', (req, res, next) => {
     );
     if (types.length === 0) return res.json([]);
 
-    res.json(Movement.findRecentWithProduct(types, limit).map(mapWithProduct));
+    res.json((await Movement.findRecentWithProduct(types, limit)).map(mapWithProduct));
   } catch (err) {
     next(err);
   }
 });
 
-router.get('/sales-by-month', (req, res, next) => {
+router.get('/sales-by-month', async (req, res, next) => {
   try {
     const start = parseInt(req.query.start, 10);
     const end = parseInt(req.query.end, 10);
     if (!Number.isFinite(start) || !Number.isFinite(end)) {
       return res.status(400).json({ error: 'start et end (timestamps ms) sont requis' });
     }
-    res.json(Movement.salesByMonth(start, end));
+    res.json(await Movement.salesByMonth(start, end));
   } catch (err) {
     next(err);
   }
 });
 
-router.get('/kpis', (req, res, next) => {
+router.get('/kpis', async (req, res, next) => {
   try {
     const start = parseInt(req.query.start, 10);
     const end = parseInt(req.query.end, 10);
     if (!Number.isFinite(start) || !Number.isFinite(end)) {
       return res.status(400).json({ error: 'start et end (timestamps ms) sont requis' });
     }
-    res.json(Movement.kpisForRange(start, end));
+    res.json(await Movement.kpisForRange(start, end));
   } catch (err) {
     next(err);
   }
 });
 
-router.post('/', (req, res, next) => {
+router.post('/', async (req, res, next) => {
   try {
     const { product_id, ts, type, quantity, unit_price, note } = req.body;
 
@@ -101,7 +101,7 @@ router.post('/', (req, res, next) => {
       return res.status(400).json({ error: `type doit être l'un de : ${VALID_TYPES.join(', ')}` });
     }
 
-    const movement = Movement.createValidated({
+    const movement = await Movement.createValidated({
       product_id,
       ts: ts ?? Date.now(),
       type,
@@ -116,12 +116,12 @@ router.post('/', (req, res, next) => {
   }
 });
 
-router.delete('/:id', (req, res, next) => {
+router.delete('/:id', async (req, res, next) => {
   try {
-    const existing = Movement.findById(req.params.id);
+    const existing = await Movement.findById(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Mouvement introuvable' });
 
-    Movement.remove(req.params.id);
+    await Movement.remove(req.params.id);
     res.status(204).send();
   } catch (err) {
     next(err);
