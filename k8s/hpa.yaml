@@ -1,0 +1,20 @@
+# Necessite metrics-server (deja present sur K3s et AKS par defaut).
+# Meme fichier applicable sur les deux clusters (K3s et AKS), Postgres partage encaisse la charge.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-api-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend-api
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
